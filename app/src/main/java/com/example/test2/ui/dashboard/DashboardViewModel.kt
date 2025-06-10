@@ -1,42 +1,36 @@
 package com.example.test2.ui.dashboard
 
 import android.app.Application
-import android.content.Context
+import android.util.Log
+import androidx.compose.ui.geometry.Offset
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.test2.ui.model.Bubble
+import com.example.test2.ui.model.Link
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
-import kotlinx.coroutines.flow.asStateFlow
-import java.io.File
-import android.util.Log
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.ui.geometry.Offset
-import com.example.test2.model.Bubble
-import com.example.test2.model.Link
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import java.io.File
 import java.util.UUID
 import kotlin.math.cos
 import kotlin.math.sin
-import kotlin.math.sqrt
 import kotlin.random.Random
 
 // État pour le menu contextuel sur une bulle
 data class BubbleContextMenuState(
     val visible: Boolean = false,
     val bubbleId: String? = null,
-    val screenPosition: Offset = Offset.Zero // Position à l'écran
+    val screenPosition: Offset = Offset.Zero
 )
 
 // État pour le menu contextuel sur le fond (pour ajouter une bulle)
 data class BackgroundContextMenuState(
     val visible: Boolean = false,
-    val worldPosition: Offset = Offset.Zero, // Position dans le "monde" du canvas
-    val screenPosition: Offset = Offset.Zero // Position à l'écran pour l'affichage du menu
+    val worldPosition: Offset = Offset.Zero,
+    val screenPosition: Offset = Offset.Zero
 )
 
 // Nouvel état pour le dialogue de renommage
@@ -73,9 +67,13 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
     private val _renameDialogState = MutableStateFlow(RenameDialogState())
     val renameDialogState: StateFlow<RenameDialogState> = _renameDialogState.asStateFlow()
 
+    private val _selectedContentBubbleId = MutableStateFlow<String?>(null)
+    val selectedContentBubbleId: StateFlow<String?> = _selectedContentBubbleId.asStateFlow()
 
-    private var isLinkingModeActive = mutableStateOf(false)
+    private var isLinkingModeActive = false
     private var pendingLinkFromBubbleIdByMenu: String? = null
+    private var simulationJob: Job? = null
+
 
     // Paramètres de simulation
     private val repulsionStrength = 2000f
@@ -83,7 +81,6 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
     private val dampingFactor = 0.85f
     private val maxSpeed = 10f
     private val floatStrength = 0.5f
-    private var simulationJob: Job? = null
 
     private val gson = Gson()
     private val dataFileName = "bubbles_data.json"
@@ -96,14 +93,14 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
         val velocityY: Float,
         val positionX: Float,
         val positionY: Float,
-        val documentId: String?
+        val documentId: String?,
+        val content: String
     )
     private data class PersistLink(val fromId: String, val toId: String)
     private data class PersistData(val bubbles: List<PersistBubble>, val links: List<PersistLink>)
 
     init {
         loadData()
-        startContinuousSimulation()
         startContinuousSimulation()
         Log.d(TAG, "ViewModel initialized with ${bubbles.value.size} bubbles.")
     }
@@ -140,9 +137,9 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
 
     private fun setDefaultData() {
         _bubbles.value = listOf(
-            Bubble(id = "bubble1", position = Offset(200f,200f), name = "Alpha", radius = 50f, documentId = "doc_alpha"),
-            Bubble(id = "bubble2", position = Offset(300f,250f), name = "Beta",  radius = 60f, documentId = "doc_beta"),
-            Bubble(id = "bubble3", position = Offset(250f,400f), name = "Gamma", radius = 40f, documentId = "doc_gamma")
+            Bubble(id = "bubble1", position = Offset(200f,200f), name = "Alpha", radius = 50f, velocity = Offset(0.2f,0.2f) ,documentId = "doc_alpha",content="Contenu"),
+            Bubble(id = "bubble2", position = Offset(300f,250f), name = "Beta",  radius = 60f, velocity = Offset(0.2f,0.2f) ,documentId = "doc_beta" ,content="Contenu"),
+            Bubble(id = "bubble3", position = Offset(250f,400f), name = "Gamma", radius = 40f, velocity = Offset(0.2f,0.2f) ,documentId = "doc_gamma",content="Contenu")
         )
         _links.value = emptyList()
         saveData()
@@ -159,7 +156,8 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
                     velocityY  = b.velocity.y,
                     positionX  = b.position.x,
                     positionY  = b.position.y,
-                    documentId = b.documentId
+                    documentId = b.documentId,
+                    content    = b.content
                 )
             },
             links = _links.value.map { l ->
@@ -174,7 +172,7 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
     fun openBubbleContextMenu(bubbleId: String, screenPos: Offset) {
         closeBackgroundContextMenu()
         _bubbleContextMenuState.value = BubbleContextMenuState(visible = true, bubbleId = bubbleId, screenPosition = screenPos)
-        isLinkingModeActive.value = false
+        isLinkingModeActive = false
         pendingLinkFromBubbleIdByMenu = null
         Log.d(TAG, "Bubble context menu opened for $bubbleId")
     }
@@ -189,7 +187,7 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
     fun onMenuOptionLink() {
         pendingLinkFromBubbleIdByMenu = _bubbleContextMenuState.value.bubbleId
         if (pendingLinkFromBubbleIdByMenu != null) {
-            isLinkingModeActive.value = true
+            isLinkingModeActive = true
             Log.d(TAG, "Link mode activated from bubble: $pendingLinkFromBubbleIdByMenu")
         } else {
             Log.w(TAG, "onMenuOptionLink called but no bubbleId in context menu state.")
@@ -218,6 +216,15 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
             Log.w(TAG, "View option selected, but no documentId for bubble $bubbleIdToView")
         }
         closeBubbleContextMenu()
+    }
+
+    fun onMenuOptionViewContent() {
+        val id = _bubbleContextMenuState.value.bubbleId
+        if (id != null) _selectedContentBubbleId.value = id
+        closeBubbleContextMenu()
+    }
+    fun clearContentSelection() {
+        _selectedContentBubbleId.value = null
     }
 
     fun onMenuOptionRename() {
@@ -297,8 +304,8 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
 
     // --- Gestion des liens ---
     fun tryFinishLink(targetBubbleId: String) {
-        Log.d(TAG, "tryFinishLink called with target: $targetBubbleId. Linking mode: ${isLinkingModeActive.value}, Source: $pendingLinkFromBubbleIdByMenu")
-        if (isLinkingModeActive.value) {
+        Log.d(TAG, "tryFinishLink called with target: $targetBubbleId. Linking mode: ${isLinkingModeActive}, Source: $pendingLinkFromBubbleIdByMenu")
+        if (isLinkingModeActive) {
             val fromId = pendingLinkFromBubbleIdByMenu
             if (fromId != null && targetBubbleId.isNotBlank() && fromId != targetBubbleId) {
                 val linkExists = _links.value.any {
@@ -320,7 +327,7 @@ class DashboardViewModel(application: Application) : AndroidViewModel(applicatio
                 Log.d(TAG, "Cannot link a bubble to itself.")
             }
             pendingLinkFromBubbleIdByMenu = null
-            isLinkingModeActive.value = false
+            isLinkingModeActive = false
             Log.d(TAG, "Linking mode deactivated.")
         }
         saveData()

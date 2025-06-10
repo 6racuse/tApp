@@ -65,7 +65,7 @@ dependencies {
     androidTestImplementation("androidx.test.espresso:espresso-core:3.5.1")
 
     implementation("com.google.android.material:material:1.9.0")
-
+    implementation("androidx.compose.animation:animation")
     // Outils Compose pour le debug
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")
